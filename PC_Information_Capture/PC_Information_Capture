@@ -1,0 +1,81 @@
+import os, platform, subprocess, socket, datetime
+from openpyxl import Workbook, load_workbook
+
+def run_cmd(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+def mask_key(key):
+    k = key.strip()
+    if not k:
+        return ""
+    k = k.replace("\n"," ").strip()
+    if len(k) <= 10:
+        return k
+    return k[:5] + "..." + k[-5:]
+
+def parse_wmic_memory(out):
+    # expect lines with numbers; return (total, free) in KB or ("","")
+    try:
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        if len(lines) >= 2:
+            vals = lines[1].split()
+            if len(vals) >= 2:
+                return vals[0], vals[1]
+        # fallback: find numbers
+        nums = [s for s in out.split() if s.isdigit()]
+        if len(nums) >= 2:
+            return nums[0], nums[1]
+    except:
+        pass
+    return "", ""
+
+def ensure_workbook(path, headers):
+    if os.path.exists(path):
+        wb = load_workbook(path)
+        ws = wb.active
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.append(headers)
+        wb.save(path)
+    return wb, ws
+
+def main():
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    hostname = socket.gethostname()
+    os_name = platform.system()
+    os_ver = platform.release()
+    cpu_count = os.cpu_count() or ""
+
+    systeminfo = run_cmd(["systeminfo"])[:1000]
+
+    ram_out = run_cmd(["wmic", "OS", "get", "TotalVisibleMemorySize,FreePhysicalMemory"])
+    total_kb, free_kb = parse_wmic_memory(ram_out)
+
+    office_out = run_cmd(["wmic", "product", "where", "name like '%Office%'", "get", "name,version"])
+    office_info = office_out.replace("\r"," ").strip()
+
+    key_out = run_cmd(["wmic", "path", "softwarelicensingservice", "get", "OA3xOriginalProductKey"])
+    product_key_partial = mask_key(key_out)
+
+    model = run_cmd(["wmic", "computersystem", "get", "model"]).replace("\r"," ").strip()
+    bios = run_cmd(["wmic", "bios", "get", "serialnumber"]).replace("\r"," ").strip()
+    hdd = run_cmd(["wmic", "diskdrive", "get", "serialnumber"]).replace("\r"," ").strip()
+
+    filename = "system_report.xlsx"
+    headers = ["Timestamp","Hostname","OS","OS_Version","CPU_Count","SystemInfo_Snippet",
+               "TotalVisibleMemoryKB","FreePhysicalMemoryKB","Office_Info","ProductKey_Partial",
+               "PC_Model","PC_Serial","HDD_Serials"]
+    wb, ws = ensure_workbook(filename, headers)
+    row = [timestamp, hostname, os_name, os_ver, cpu_count, systeminfo,
+           total_kb, free_kb, office_info, product_key_partial, model, bios, hdd]
+    ws.append(row)
+    wb.save(filename)
+    print("Saved Excel:", os.path.abspath(filename))
+
+if __name__ == "__main__":
+    main()
